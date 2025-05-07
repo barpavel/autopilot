@@ -13,7 +13,6 @@ use std::{
 };
 use std::borrow::Cow;
 
-#[derive(Clone)]
 enum SessionConfiguration {
     Local(),
     Remote(Session, RemoteConfig),
@@ -35,20 +34,6 @@ impl SessionConfiguration {
             },
         }
     }
-
-    fn run_command(&mut self, cmd: String) -> io::Result<(Vec<u8>, Vec<u8>)> {
-        match self {
-            SessionConfiguration::Local() => {
-                CommandSession::run_local_command("sh", cmd)
-            }
-            SessionConfiguration::Remote(session, _) => {
-                CommandSession::run_remote_command(
-                    &session,
-                    cmd,
-                )
-            }
-        }
-    }
 }
 
 pub struct CommandSession {
@@ -63,11 +48,24 @@ impl CommandSession {
         Ok(
             Self {
                 session_configuration: if let Some(remote_config) = remote {
-                    SessionConfiguration::Remote(Self::init_remote_session(&remote_config)?, remote_config)
+                    let remote_config_resolved = RemoteConfig {
+                        host: Self::resolve_env_str(remote_config.host),
+                        port: remote_config.port,
+                        user: Self::resolve_env_str(remote_config.user),
+                        password: Self::resolve_env_opt(remote_config.password),
+                    };
+                    SessionConfiguration::Remote(
+                        Self::init_remote_session(&remote_config_resolved)?, remote_config_resolved
+                    )
                 } else {
                     SessionConfiguration::Local()
                 },
-                sudo,
+                sudo: sudo.map(|sudo_config|
+                    SudoConfig {
+                        user: Self::resolve_env_opt(sudo_config.user),
+                        password: Self::resolve_env_opt(sudo_config.password),
+                    }
+                ),
                 stdout: Vec::new(),
                 stderr: Vec::new(),
             }
@@ -93,7 +91,16 @@ impl CommandSession {
     }
 
     pub(crate) fn run_command(&mut self, cmd: String) -> io::Result<()> {
-        (self.stdout, self.stderr) = self.session_configuration.run_command(self.get_sudo_command(cmd))?;
+        let cmd = self.get_sudo_command(cmd);
+        (self.stdout, self.stderr) = match &self.session_configuration {
+            SessionConfiguration::Local() => {
+                Self::run_local_command("sh", cmd)?
+            }
+            SessionConfiguration::Remote(session, _) => {
+                Self::run_remote_command(session, cmd)?
+            }
+        };
+
         Ok(())
     }
 
@@ -117,8 +124,7 @@ impl CommandSession {
         session.handshake()?;
 
         // TODO: improve error handling
-        let password = Self::resolve_env(remote_config.password.as_ref()).unwrap();
-        session.userauth_password(&remote_config.user, &password)?;
+        session.userauth_password(&remote_config.user, remote_config.password.as_ref().unwrap())?;
 
         if !session.authenticated() {
             return Err(Error::from(ErrorKind::ConnectionRefused));
@@ -140,21 +146,30 @@ impl CommandSession {
         Ok((stdout, stderr))
     }
 
-    fn resolve_env(password: Option<&String>) -> anyhow::Result<String> {
-        let value = password.unwrap();
+    fn resolve_env_str(value: String) -> String {
         if value.starts_with("$env:") {
             let env_var = &value[5..];
-            env::var(env_var).with_context(|| format!("Missing environment variable: {}", env_var))
+            env::var(env_var)
+                .with_context(|| format!("Missing environment variable: {}", env_var))
+                // TODO: improve error handling
+                .unwrap()
         } else {
-            Ok(value.to_string())
+            value
         }
+    }
+
+    fn resolve_env_opt(value_opt: Option<String>) -> Option<String> {
+        value_opt.map(|value| Self::resolve_env_str(value))
     }
 
     fn get_sudo_command(&self, cmd: String) -> String {
         if let Some(sudo_config) = &self.sudo {
-            let user = sudo_config.user.as_ref().unwrap();
-            let password = Self::resolve_env(sudo_config.password.as_ref()).unwrap();
-            format!("echo {} | sudo -kS -u {} -p '' {}", password, user, cmd)
+            format!(
+                "echo {} | sudo -kS -u {} -p '' {}",
+                sudo_config.password.as_ref().unwrap(),
+                sudo_config.user.as_ref().unwrap(),
+                cmd,
+            )
         } else {
             cmd
         }

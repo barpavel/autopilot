@@ -74,17 +74,29 @@ stages:
       - type: command
         command:
           - restart-service.sh
-          - echo 'Service restarted'
+          - echo 'Service restarted!'
         hide_stdout: true
         hide_stderr: false
-        sudo:
-          user: root
-          password: admin1234
         remote:
-          user: user
+          user: admin
           host: server.com
           port: 22
+          password: admin1234
+        sudo:
+          user: root
+          password: root1234
+
+      - type: command
+        command:
+          - mine-bitcoin.sh
+        remote:
+          host: $env:REMOTE_HOST
+          port: 22
+          user: $env:REMOTE_USER
           password: $env:REMOTE_PASSWORD
+        sudo:
+          user: $env:REMOTE_SUDO_USER
+          password: $env:REMOTE_SUDO_PASSWORD
         loop:
           times: 3
           delay: 2000
@@ -111,4 +123,4 @@ includes a modern user interface to show the demos.
 
 # Contribute
 
-PRs welcome! Feel free to open issues for new features.
+PRs are welcome! Feel free to open issues for new features.
