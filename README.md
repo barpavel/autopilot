@@ -89,12 +89,12 @@ stages:
       - type: command
         command: mine-bitcoin.sh
         remote:
-          user: admin
-          host: server.com
+          user: $env:REMOTE_USER
+          host: $env:REMOTE_HOST
           port: 22
           password: $env:REMOTE_PASSWORD
         sudo:
-          user: root
+          user: $env:REMOTE_SUDO_USER
           password: $env:REMOTE_SUDO_PASSWORD
         loop:
           times: 3
